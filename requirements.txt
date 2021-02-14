@@ -1,0 +1,9 @@
+omegaconf
+torchaudio
+soundfile
+pydub
+sounddevice
+scipy
+torch
+webrtcvad
+halo
