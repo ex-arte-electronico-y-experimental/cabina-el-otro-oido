@@ -27,19 +27,27 @@ from utils import (init_jit_model, read_audio, read_batch, prepare_model_input, 
 
 # misc
 from halo import Halo
+import argparse
 
 MODEL_PATH = "./models/es_v1_jit.model"
-DEVICE = torch.device('cpu')   # you can use any pytorch device
-# MODELS = OmegaConf.load('models.yml')
+DEVICE = torch.device("cpu")   # you can use any pytorch device
+# MODELS = OmegaConf.load("models.yml")
 
-SPINNER = Halo(spinner='dots')
+SPINNER = Halo(spinner="dots")
+
+# Get CLI arguments:
+parser = argparse.ArgumentParser("Adjust Voice Activity Detection controls")
+parser.add_argument("-a", "--agresividad", metavar='', type=int, help="Numero [0 - 3], determina cómo de agresivo es el VAD con el non-speech. Default 2")
+parser.add_argument("-t", "--tiempo-decision", metavar='', type=int, help="Duración de la ventana de decisión del VAD (para determinar si ha comenzado una frase o no), en milisegundos. Default 300ms")
+parser.add_argument("-r", "--frame-ratio", metavar='', type=float, help="Proporción [0.0 - 1.0] necesaria de speech frames a non-speech frames en el tiempo de decisión para determinar que se ha detectado habla. Default 0.75")
+ARGS = parser.parse_args()
+
 
 # STT class for scoping:
-
 class SpeechRecognition:
-	def __init__(self):
+	def __init__(self, vad_aggresiveness=2, vad_time_window=300, vad_ratio=0.75):
 		print("Cargando modelo...")
-		# eventually download model from MODELS.stt_models.es.latest.jit so there's no fetching
+		# eventually download model from MODELS.stt_models.es.latest.jit so there"s no fetching
 		self.model, self.decoder = init_jit_model_local(MODEL_PATH, device=DEVICE)
 		print("Modelo listo!")
 
@@ -48,8 +56,9 @@ class SpeechRecognition:
 		self.frame_size = 480 # approx. 30m, webrtcvad imposes limits of 10, 20, 30 ms frames
 		self.frame_duration_ms = 1000 * self.frame_size // self.sample_rate
 		
-		self.vad = webrtcvad.Vad(3)
-		self.vad_padding_ms = 300
+		self.vad = webrtcvad.Vad(vad_aggresiveness)
+		self.vad_padding_ms = vad_time_window
+		self.vad_ratio = vad_ratio
 		self.vad_ring_buffer = deque(maxlen = self.vad_padding_ms // self.frame_duration_ms)
 
 		self.float_frame = 0 # will change on every audio clock cycle, to be accesed by vad_switch
@@ -58,6 +67,7 @@ class SpeechRecognition:
 		self.int16tofloat = lambda x: x/abs(self.int16info.min) if x < 0 else x/self.int16info.max
 		self.blockaccum = []
 		self.utterance_transcription = ""
+		self.continuous_transcription = ""
 
 		self.vad_triggered = False
 
@@ -107,7 +117,7 @@ class SpeechRecognition:
 		self.float_frame = np.fromiter(map(self.int16tofloat, np.frombuffer(indata, dtype=np.int16)), float)
 
 		# print(f"debug, vad_switch_generator type: {type(self.vad_switch_generator)}")
-		for frame in self.vad_switch():
+		for frame in self.vad_switch(self.vad_ratio):
 			if frame is not None:
 				SPINNER.start(text="Esperando a que termine la frase...")
 
@@ -123,19 +133,24 @@ class SpeechRecognition:
 				# print(interim_transcript)
 				if interim_transcript != self.utterance_transcription:
 					self.utterance_transcription = interim_transcript
-					print(f"\n Ha dicho: {self.utterance_transcription}")
+					self.continuous_transcription += " " + self.utterance_transcription
+					print(f"\n{self.continuous_transcription}")
 
 				SPINNER.stop()
 	
 	def start(self):
-		with sd.RawInputStream(channels=1, callback=self.audio_callback, samplerate=self.sample_rate, blocksize=self.frame_size, dtype='int16', device=None):
+		with sd.RawInputStream(channels=1, callback=self.audio_callback, samplerate=self.sample_rate, blocksize=self.frame_size, dtype="int16", device=None):
 			print("Escuchando...")
 			while True:
 				sd.sleep(1)
 
 
 if __name__ == "__main__":
-	print(f"Available devices: {sd.query_devices(kind='input')} \n Default: {sd.default.device}")
+	# print(f"Available devices: {sd.query_devices(kind="input")} \n Default: {sd.default.device}")
+	agresividad = ARGS.agresividad if ARGS.agresividad else 2
+	tiempo_decision = ARGS.tiempo_decision if ARGS.tiempo_decision else 300 
+	frame_ratio = ARGS.frame_ratio if ARGS.frame_ratio else 0.75
+
 	# create recogniser object
-	stt = SpeechRecognition()
+	stt = SpeechRecognition(agresividad, tiempo_decision, frame_ratio)
 	stt.start()
